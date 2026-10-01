@@ -37,9 +37,8 @@ use axum::{
     extract::Extension,
     http::{Uri, uri::Scheme},
 };
-use sea_orm::{
-    ConnectionTrait, Database, DatabaseConnection, DatabaseConnectionType, query::Statement,
-};
+use sea_orm::sqlx::sqlite::{SqliteJournalMode, SqliteSynchronous};
+use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection, query::Statement};
 use tokio::net::TcpListener;
 use tokio::sync::OnceCell;
 use tokio::time;
@@ -109,30 +108,34 @@ impl StateInner {
     async fn database(&self) -> ServerResult<&DatabaseConnection> {
         self.database
             .get_or_try_init(|| async {
-                let db = Database::connect(&self.config.database.url)
-                    .await
-                    .map_err(ServerError::database_error);
-                if let Ok(db_conn) = &db
-                    && let DatabaseConnectionType::SqlxSqlitePoolConnection(conn) = &db_conn.inner
-                {
-                    // execute some sqlite-specific performance optimizations
-                    // see https://phiresky.github.io/blog/2020/sqlite-performance-tuning/ for
-                    // more details
-                    // intentionally ignore errors from this: this is purely for performance,
-                    // not for correctness, so we can live without this
-                    _ = conn
-                        .execute_unprepared(
-                            "
-                        pragma journal_mode=WAL;
-                        pragma synchronous=normal;
-                        pragma temp_store=memory;
-                        pragma mmap_size = 30000000000;
-                        ",
-                        )
-                        .await;
-                }
+                let mut options = ConnectOptions::new(self.config.database.url.as_str());
 
-                db
+                // SQLite-specific performance tuning, see
+                // https://phiresky.github.io/blog/2020/sqlite-performance-tuning/
+                //
+                // Except for journal_mode, which is stored in the database file, these
+                // are per-connection settings. They have to be part of the connect
+                // options, which sqlx applies to every connection it opens: the pool
+                // replaces connections on its own (after 10 minutes idle or 30 minutes
+                // of age by default), and settings executed once after connecting are
+                // lost with the first replacement.
+                //
+                // The busy timeout covers locks held by other connections, such as the
+                // garbage collector's own pool, and is otherwise 5 seconds.
+                //
+                // Other database backends ignore this.
+                options.map_sqlx_sqlite_opts(|sqlite| {
+                    sqlite
+                        .journal_mode(SqliteJournalMode::Wal)
+                        .synchronous(SqliteSynchronous::Normal)
+                        .pragma("temp_store", "memory")
+                        .pragma("mmap_size", "30000000000")
+                        .busy_timeout(Duration::from_secs(30))
+                });
+
+                Database::connect(options)
+                    .await
+                    .map_err(ServerError::database_error)
             })
             .await
     }
