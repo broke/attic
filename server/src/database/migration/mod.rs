@@ -18,6 +18,7 @@ mod m20260508_000001_add_chunk_state_holders_index;
 mod m20260611_000001_add_nar_state_holders_index;
 mod m20260624_000001_remove_chunk_recovery;
 mod m20261002_000001_restore_nar_hash_index;
+mod m20261002_000002_add_object_nar_id_index;
 
 pub struct Migrator;
 
@@ -41,6 +42,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260611_000001_add_nar_state_holders_index::Migration),
             Box::new(m20260624_000001_remove_chunk_recovery::Migration),
             Box::new(m20261002_000001_restore_nar_hash_index::Migration),
+            Box::new(m20261002_000002_add_object_nar_id_index::Migration),
         ]
     }
 }
